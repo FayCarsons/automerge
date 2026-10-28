@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 3f3420f5587b186a4c316e54552c72f93a94da239eac7e7f92336119c7382e5f # shrinks to encoding = UnicodeCodePoint, old = [Text { text: "a\u{301}", marks: None }], new = []

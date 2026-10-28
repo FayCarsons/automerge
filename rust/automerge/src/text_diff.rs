@@ -272,6 +272,21 @@ impl BlockOrGrapheme {
     }
 }
 
+impl BlockDiffHook<'_> {
+    fn delete_grapheme(&mut self, g: &str) -> Result<(), crate::AutomergeError> {
+        let width = self.doc.text_encoding().width(g);
+        self.tx.splice_text(
+            self.doc,
+            self.patch_log,
+            self.obj,
+            self.idx,
+            width as isize,
+            "",
+        )?;
+        Ok(())
+    }
+}
+
 impl myers::DiffHook for BlockDiffHook<'_> {
     type Error = crate::AutomergeError;
 
@@ -299,10 +314,7 @@ impl myers::DiffHook for BlockDiffHook<'_> {
                     self.tx
                         .join_block(self.doc, self.patch_log, self.obj, self.idx)?;
                 }
-                BlockOrGrapheme::Grapheme(_) => {
-                    self.tx
-                        .delete(self.doc, self.patch_log, self.obj, self.idx)?;
-                }
+                BlockOrGrapheme::Grapheme(g) => self.delete_grapheme(g)?,
             }
         }
         Ok(())
@@ -390,9 +402,8 @@ impl myers::DiffHook for BlockDiffHook<'_> {
                             .join_block(self.doc, self.patch_log, self.obj, self.idx)?;
                         old_idx += 1;
                     }
-                    BlockOrGrapheme::Grapheme(_) => {
-                        self.tx
-                            .delete(self.doc, self.patch_log, self.obj, self.idx)?;
+                    BlockOrGrapheme::Grapheme(g) => {
+                        self.delete_grapheme(g)?;
                         old_idx += 1;
                     }
                 },
@@ -405,9 +416,8 @@ impl myers::DiffHook for BlockDiffHook<'_> {
                         old_idx += 1;
                         new_idx += 1;
                     }
-                    (BlockOrGrapheme::Grapheme(_g1), BlockOrGrapheme::Grapheme(g2)) => {
-                        self.tx
-                            .delete(self.doc, self.patch_log, self.obj, self.idx)?;
+                    (BlockOrGrapheme::Grapheme(g1), BlockOrGrapheme::Grapheme(g2)) => {
+                        self.delete_grapheme(g1)?;
                         self.tx
                             .splice_text(self.doc, self.patch_log, self.obj, self.idx, 0, g2)?;
                         self.idx += self.doc.text_encoding().width(g2);
@@ -423,9 +433,8 @@ impl myers::DiffHook for BlockDiffHook<'_> {
                         old_idx += 1;
                         new_idx += 1;
                     }
-                    (BlockOrGrapheme::Grapheme(_g1), BlockOrGrapheme::Block(b2)) => {
-                        self.tx
-                            .delete(self.doc, self.patch_log, self.obj, self.idx)?;
+                    (BlockOrGrapheme::Grapheme(g1), BlockOrGrapheme::Block(b2)) => {
+                        self.delete_grapheme(g1)?;
                         split_block(self.doc, self.tx, self.patch_log, self.obj, self.idx, b2)?;
                         self.idx += 1;
                         old_idx += 1;

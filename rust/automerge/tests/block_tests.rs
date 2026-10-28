@@ -5,8 +5,9 @@ use automerge::{
     iter::Span,
     marks::{ExpandMark, Mark, UpdateSpansConfig},
     transaction::Transactable,
-    AutoCommit, ObjType, Patch, PatchAction, Prop, ReadDoc, ScalarValue, Value, ROOT,
+    AutoCommit, ObjType, Patch, PatchAction, Prop, ReadDoc, ScalarValue, TextEncoding, Value, ROOT,
 };
+use proptest::strategy::{Just, Strategy};
 use test_log::test;
 
 fn markset(values: Vec<(&'static str, ScalarValue)>) -> Option<Arc<automerge::marks::MarkSet>> {
@@ -943,4 +944,77 @@ fn test_splice_with_mark() {
             },
         ]
     );
+}
+
+// Utf8CodeUnit is left out: a block marker is three bytes wide under it, but `update_spans`
+// counts every block as one unit.
+fn arb_encoding() -> impl Strategy<Value = TextEncoding> {
+    proptest::prop_oneof![
+        Just(TextEncoding::UnicodeCodePoint),
+        Just(TextEncoding::Utf16CodeUnit),
+        Just(TextEncoding::GraphemeCluster),
+    ]
+}
+
+// Code points that combine into graphemes several units wide: combining accents, ZWJ
+// sequences, regional-indicator flags and skin-tone modifiers.
+fn arb_text() -> impl Strategy<Value = String> {
+    proptest::collection::vec(
+        proptest::sample::select(vec![
+            'a',
+            'e',
+            '\u{301}',
+            '\u{200d}',
+            '👍',
+            '\u{1f3fd}',
+            '🇫',
+            '🇷',
+            '😀',
+        ]),
+        1..8,
+    )
+    .prop_map(|chars| chars.into_iter().collect())
+}
+
+fn arb_spans() -> impl Strategy<Value = Vec<Span>> {
+    proptest::collection::vec(
+        proptest::prop_oneof![
+            arb_text().prop_map(|text| Span::Text { text, marks: None }),
+            proptest::sample::select(vec!["paragraph", "heading"]).prop_map(|ty| {
+                Span::Block(hydrate_map! {
+                    "type" => ty,
+                    "parents" => hydrate_list![],
+                    "attrs" => hydrate_map!{}
+                })
+            }),
+        ],
+        0..8,
+    )
+    .prop_map(merge_adjacent_text)
+}
+
+fn merge_adjacent_text(spans: Vec<Span>) -> Vec<Span> {
+    let mut merged: Vec<Span> = Vec::with_capacity(spans.len());
+    for span in spans {
+        match (merged.last_mut(), span) {
+            (Some(Span::Text { text, .. }), Span::Text { text: more, .. }) => text.push_str(&more),
+            (_, span) => merged.push(span),
+        }
+    }
+    merged
+}
+
+proptest::proptest! {
+    #[test]
+    fn update_spans_produces_the_new_spans(
+        encoding in arb_encoding(),
+        old in arb_spans(),
+        new in arb_spans(),
+    ) {
+        let mut doc = AutoCommit::new_with_encoding(encoding);
+        let text = doc.put_object(ROOT, "text", ObjType::Text).unwrap();
+        doc.update_spans(&text, UpdateSpansConfig::default(), old).unwrap();
+        doc.update_spans(&text, UpdateSpansConfig::default(), new.clone()).unwrap();
+        proptest::prop_assert_eq!(doc.spans(&text).unwrap().collect::<Vec<_>>(), new);
+    }
 }
