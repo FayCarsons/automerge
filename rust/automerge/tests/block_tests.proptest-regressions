@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 3f3420f5587b186a4c316e54552c72f93a94da239eac7e7f92336119c7382e5f # shrinks to encoding = UnicodeCodePoint, old = [Text { text: "a\u{301}", marks: None }], new = []
+cc 152065f8e29d2b3e7a6edb2b6d817fc4d306ea31b3283c1f931061587daa5693 # shrinks to encoding = Utf8CodeUnit, old = [], new = [Block(Map({"attrs": MapValue { value: Map(Map({})), conflict: false }, "parents": MapValue { value: List([]), conflict: false }, "type": MapValue { value: Scalar(Str("paragraph")), conflict: false }})), Block(Map({"type": MapValue { value: Scalar(Str("paragraph")), conflict: false }, "attrs": MapValue { value: Map(Map({})), conflict: false }, "parents": MapValue { value: List([]), conflict: false }})), Text { text: "a", marks: None }]

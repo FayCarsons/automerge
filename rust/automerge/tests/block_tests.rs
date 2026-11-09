@@ -946,11 +946,10 @@ fn test_splice_with_mark() {
     );
 }
 
-// Utf8CodeUnit is left out: a block marker is three bytes wide under it, but `update_spans`
-// counts every block as one unit.
 fn arb_encoding() -> impl Strategy<Value = TextEncoding> {
     proptest::prop_oneof![
         Just(TextEncoding::UnicodeCodePoint),
+        Just(TextEncoding::Utf8CodeUnit),
         Just(TextEncoding::Utf16CodeUnit),
         Just(TextEncoding::GraphemeCluster),
     ]
@@ -1017,4 +1016,31 @@ proptest::proptest! {
         doc.update_spans(&text, UpdateSpansConfig::default(), new.clone()).unwrap();
         proptest::prop_assert_eq!(doc.spans(&text).unwrap().collect::<Vec<_>>(), new);
     }
+}
+
+#[test]
+fn update_spans_marks_text_after_a_block_in_utf8() {
+    let mut doc = AutoCommit::new_with_encoding(TextEncoding::Utf8CodeUnit);
+    let text = doc.put_object(ROOT, "text", ObjType::Text).unwrap();
+    let block = Span::Block(hydrate_map! {
+        "type" => "paragraph",
+        "parents" => hydrate_list![],
+        "attrs" => hydrate_map!{}
+    });
+    let spans = vec![
+        block,
+        Span::Text {
+            text: "ab".into(),
+            marks: None,
+        },
+        Span::Text {
+            text: "cd".into(),
+            marks: markset(vec![("bold", true.into())]),
+        },
+    ];
+
+    doc.update_spans(&text, UpdateSpansConfig::default(), spans.clone())
+        .unwrap();
+
+    assert_eq!(doc.spans(&text).unwrap().collect::<Vec<_>>(), spans);
 }

@@ -176,7 +176,7 @@ fn apply_marks_diff(
     for span in new_spans {
         match span {
             Span::Block(_) => {
-                idx += 1; // Blocks take up one position
+                idx += block_width(doc.text_encoding());
             }
             Span::Text { text, marks } => {
                 let text_width = doc.text_encoding().width(text);
@@ -266,10 +266,15 @@ enum BlockOrGrapheme {
 impl BlockOrGrapheme {
     fn width(&self, encoding: TextEncoding) -> usize {
         match self {
-            BlockOrGrapheme::Block(_) => 1,
+            BlockOrGrapheme::Block(_) => block_width(encoding),
             BlockOrGrapheme::Grapheme(g) => encoding.width(g),
         }
     }
+}
+
+/// The width of a block marker, which the text encoding sizes as an object replacement character.
+fn block_width(encoding: TextEncoding) -> usize {
+    encoding.width("\u{fffc}")
 }
 
 impl BlockDiffHook<'_> {
@@ -344,7 +349,7 @@ impl myers::DiffHook for BlockDiffHook<'_> {
                         run.clear();
                     }
                     split_block(self.doc, self.tx, self.patch_log, self.obj, self.idx, b)?;
-                    self.idx += 1;
+                    self.idx += block_width(self.doc.text_encoding());
                 }
                 BlockOrGrapheme::Grapheme(g) => {
                     run.push_str(g);
@@ -386,7 +391,7 @@ impl myers::DiffHook for BlockDiffHook<'_> {
                 (None, Some(val)) => match val {
                     BlockOrGrapheme::Block(b) => {
                         split_block(self.doc, self.tx, self.patch_log, self.obj, self.idx, b)?;
-                        self.idx += 1;
+                        self.idx += block_width(self.doc.text_encoding());
                         new_idx += 1;
                     }
                     BlockOrGrapheme::Grapheme(g) => {
@@ -412,7 +417,7 @@ impl myers::DiffHook for BlockDiffHook<'_> {
                         if b1 != b2 {
                             update_block(self.doc, self.tx, self.patch_log, self.obj, self.idx, b2)?
                         }
-                        self.idx += 1;
+                        self.idx += block_width(self.doc.text_encoding());
                         old_idx += 1;
                         new_idx += 1;
                     }
@@ -436,7 +441,7 @@ impl myers::DiffHook for BlockDiffHook<'_> {
                     (BlockOrGrapheme::Grapheme(g1), BlockOrGrapheme::Block(b2)) => {
                         self.delete_grapheme(g1)?;
                         split_block(self.doc, self.tx, self.patch_log, self.obj, self.idx, b2)?;
-                        self.idx += 1;
+                        self.idx += block_width(self.doc.text_encoding());
                         old_idx += 1;
                         new_idx += 1;
                     }
