@@ -971,10 +971,11 @@ impl TransactionInner {
         let mut op = TxOp::list_del(self.next_id(), text_obj, index, elemid, [found.op.id]);
 
         let succ_pos = vec![found.op.add_succ(op.id(), None)];
+        let width = found.op.width(SequenceType::Text, doc.text_encoding());
 
         op.undo = doc.ops_mut().add_succ_with_undo(&succ_pos);
 
-        patch_log.delete_seq(text_obj.id, index, 1);
+        patch_log.delete_seq(text_obj.id, index, width);
 
         self.pending.push(op);
 

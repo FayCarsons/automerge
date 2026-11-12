@@ -1044,3 +1044,46 @@ fn update_spans_marks_text_after_a_block_in_utf8() {
 
     assert_eq!(doc.spans(&text).unwrap().collect::<Vec<_>>(), spans);
 }
+
+// Runs `edit` with the patch log active and returns the patches it logged, alongside the patches
+// a full diff between the same heads computes. The full diff sizes deletions by text encoding.
+fn logged_and_computed_patches(
+    doc: &mut AutoCommit,
+    edit: impl FnOnce(&mut AutoCommit),
+) -> (Vec<Patch>, Vec<Patch>) {
+    let before = doc.get_heads();
+    doc.update_diff_cursor();
+    edit(doc);
+    let logged = doc.diff_incremental();
+    let after = doc.get_heads();
+    let computed = doc.fork().diff(&before, &after);
+    (logged, computed)
+}
+
+#[test]
+fn join_block_patch_deletes_the_whole_block_marker_in_utf8() {
+    let mut doc = AutoCommit::new_with_encoding(TextEncoding::Utf8CodeUnit);
+    let text = doc.put_object(ROOT, "text", ObjType::Text).unwrap();
+    doc.splice_text(&text, 0, 0, "ab").unwrap();
+    doc.split_block(&text, 2).unwrap();
+    doc.splice_text(&text, 5, 0, "cd").unwrap();
+
+    let mut hydrated = doc.hydrate(ROOT, None).unwrap();
+    let (logged, computed) =
+        logged_and_computed_patches(&mut doc, |doc| doc.join_block(&text, 2).unwrap());
+    hydrated
+        .apply_patches(TextEncoding::Utf8CodeUnit, logged.clone())
+        .unwrap();
+    assert_eq!(hydrated, doc.hydrate(ROOT, None).unwrap());
+
+    assert_eq!(doc.text(&text).unwrap(), "abcd");
+    let actions = |patches: &[Patch]| patches.iter().map(|p| p.action.clone()).collect::<Vec<_>>();
+    assert_eq!(
+        actions(&computed),
+        vec![PatchAction::DeleteSeq {
+            index: 2,
+            length: 3
+        }]
+    );
+    assert_eq!(actions(&logged), actions(&computed));
+}
