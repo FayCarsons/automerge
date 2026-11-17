@@ -6,7 +6,7 @@ use crate::op_set2::SuccInsert;
 use crate::types::{
     ActorId, ElemId, ObjId, ObjType, OpId, Prop, ScalarValue, SequenceType, SmallHashMap,
 };
-use crate::{Automerge, Change, ChangeHash, PatchLog, PatchLogMismatch};
+use crate::{Automerge, Change, ChangeHash, PatchLog};
 use crate::{AutomergeError, TextEncoding};
 
 use super::super::op::{ChangeOp, Op, OpBuilder};
@@ -854,9 +854,79 @@ impl BatchApply {
         }
     }
 
-    fn import_ops(&mut self, doc: &mut Automerge) {
+    fn check_actor_history(&self, doc: &Automerge) -> Result<(), AutomergeError> {
+        let mut last: HashMap<&ActorId, (u64, u64)> = HashMap::new();
         for c in &self.changes {
-            doc.import_ops_to(c, &mut self.ops).unwrap();
+            let (seq, max_op) = last.entry(c.actor_id()).or_insert_with(|| {
+                doc.ops().lookup_actor(c.actor_id()).map_or((0, 0), |a| {
+                    let graph = &doc.change_graph;
+                    (graph.seq_for_actor(a), graph.max_op_for_actor(a))
+                })
+            });
+            if c.seq() != *seq + 1
+                || c.start_op().get() <= *max_op
+                || (c.seq() != 1 && c.author().is_some())
+            {
+                return Err(AutomergeError::InvalidSeq(c.seq()));
+            }
+            (*seq, *max_op) = (c.seq(), c.max_op());
+        }
+        Ok(())
+    }
+
+    fn import_ops(&mut self, doc: &mut Automerge) -> Result<(), AutomergeError> {
+        for c in &self.changes {
+            doc.import_ops_to(c, &mut self.ops)?;
+        }
+        Ok(())
+    }
+
+    /// Rejects ops the walk cannot place or the change collector cannot write
+    /// back out: keys must suit their object, the elements and preds an op
+    /// names must already exist under its object (in the document or earlier
+    /// in the batch), and marks belong only in text.
+    fn check_ops(&self, ops: &OpSet, obj_info: &ObjIndex) -> Result<(), AutomergeError> {
+        for os in &self.obj_spans {
+            let Some(otype) = obj_info
+                .object_type(&os.obj)
+                .filter(|t| *t == ObjType::Map || t.is_sequence())
+            else {
+                return Err(AutomergeError::NotAnObject);
+            };
+            let span = &self.ops[os.span.clone()];
+            let index: HashMap<OpId, usize> =
+                span.iter().enumerate().map(|(i, o)| (o.id(), i)).collect();
+            let find = |id: &OpId, before: usize| match index.get(id) {
+                Some(&j) => (j < before).then(|| (span[j].insert(), span[j].elemid_or_key())),
+                None => ops
+                    .find_op_by_id_and_vis_fast(id)
+                    .filter(|(d, _)| d.obj == os.obj)
+                    .map(|(d, _)| (d.insert, d.elemid_or_key())),
+            };
+            for (i, o) in span.iter().enumerate() {
+                let key = o.elemid_or_key();
+                let placed = match o.key() {
+                    KeyRef::Map(_) => otype == ObjType::Map,
+                    KeyRef::Seq(e) if e.is_head() => otype.is_sequence() && o.insert(),
+                    KeyRef::Seq(e) => {
+                        otype.is_sequence() && find(&e.0, i).is_some_and(|(insert, _)| insert)
+                    }
+                };
+                let preds = o
+                    .pred()
+                    .iter()
+                    .all(|p| *p < o.id() && find(p, i).is_some_and(|(_, k)| k == key));
+                let marked = o.action() != Action::Mark || otype == ObjType::Text;
+                if !(placed && preds && marked) {
+                    return Err(AutomergeError::InvalidOp(otype));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn update_history(&self, doc: &mut Automerge) {
+        for c in &self.changes {
             doc.update_history(c);
         }
         doc.remove_unused_actors(true);
@@ -866,16 +936,25 @@ impl BatchApply {
         &mut self,
         doc: &mut Automerge,
         log: &mut PatchLog,
-    ) -> Result<(), PatchLogMismatch> {
+    ) -> Result<(), AutomergeError> {
+        self.check_actor_history(doc)?;
+
         self.insert_new_actors(doc);
-
-        log.migrate_actors(&doc.ops().actors)?;
-
-        self.import_ops(doc);
 
         let mut obj_info = doc.ops().obj_info.clone();
 
-        self.order_ops_for_doc(&mut obj_info);
+        let checked = self.import_ops(doc).and_then(|()| {
+            self.order_ops_for_doc(&mut obj_info);
+            self.check_ops(doc.ops(), &obj_info)
+        });
+        if let Err(e) = checked {
+            doc.remove_unused_actors(false);
+            return Err(e);
+        }
+
+        self.update_history(doc);
+
+        log.migrate_actors(&doc.ops().actors)?;
 
         let mut succ = vec![];
 
@@ -1102,7 +1181,7 @@ impl Automerge {
 
         self.queue.extend(incoming);
         let changes = self.queue.pop_topo_sorted_ready(&self.change_graph);
-        Ok(BatchApply::new(changes).apply(self, log)?)
+        BatchApply::new(changes).apply(self, log)
     }
 
     fn import_ops_to(
@@ -1116,10 +1195,14 @@ impl Automerge {
     }
 
     fn import_ops(&mut self, change: &Change) -> Result<Vec<ChangeOp>, AutomergeError> {
-        let actors: Vec<_> = change
+        let actors = change
             .actors()
-            .map(|a| self.ops.lookup_actor(a).unwrap())
-            .collect();
+            .map(|a| {
+                self.ops
+                    .lookup_actor(a)
+                    .ok_or_else(|| AutomergeError::InvalidActorId(a.to_hex_string()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         change
             .iter_ops()

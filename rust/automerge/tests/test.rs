@@ -4448,3 +4448,181 @@ fn patches_expose_surviving_conflict_after_deleting_other_branch_from_fuzz_trace
         .unwrap();
     assert_eq!(actual, expected);
 }
+
+#[test]
+fn malformed_changes_are_rejected_and_leave_the_document_unchanged() {
+    use automerge::legacy::{ElementId, Key, MarkData, ObjectId, Op, OpId, OpType, SortedVec};
+
+    let aa = ActorId::from(b"aa".as_slice());
+    let bb = ActorId::from(b"bb".as_slice());
+    let mut doc = Automerge::new().with_actor(aa.clone());
+    let mut tx = doc.transaction();
+    tx.put(ROOT, "k", 1).unwrap();
+    let list = tx.put_object(ROOT, "l", ObjType::List).unwrap();
+    tx.insert(&list, 0, "x").unwrap();
+    tx.commit();
+    let heads = doc.get_heads();
+    let saved = doc.save();
+
+    let op = |obj: ObjectId, key: Key, insert: bool, action: OpType, pred: Vec<OpId>| Op {
+        action,
+        obj,
+        key,
+        insert,
+        pred: SortedVec::from(pred),
+    };
+    let put = || OpType::Put(ScalarValue::Int(2));
+    let key = |k: &str| Key::Map(k.into());
+    let change = |actor: &ActorId, seq: u64, start_op: u64, operations: Vec<Op>| {
+        Change::from(ExpandedChange {
+            operations,
+            actor_id: actor.clone(),
+            hash: None,
+            seq,
+            start_op: std::num::NonZeroU64::new(start_op).unwrap(),
+            time: 0,
+            message: None,
+            deps: heads.clone(),
+            extra_bytes: vec![],
+            author: None,
+        })
+    };
+    let list = ObjectId::Id(OpId(2, aa.clone()));
+    let missing = OpId(99, aa.clone());
+
+    let malformed = [
+        (
+            "first change of a new actor at seq 2",
+            change(
+                &bb,
+                2,
+                4,
+                vec![op(ObjectId::Root, key("z"), false, put(), vec![])],
+            ),
+        ),
+        (
+            "seq gap for a known actor",
+            change(
+                &aa,
+                3,
+                4,
+                vec![op(ObjectId::Root, key("z"), false, put(), vec![])],
+            ),
+        ),
+        (
+            "actor the document has never seen",
+            change(
+                &bb,
+                1,
+                4,
+                vec![op(
+                    ObjectId::Root,
+                    key("k"),
+                    false,
+                    put(),
+                    vec![OpId(1, ActorId::from(b"cc".as_slice()))],
+                )],
+            ),
+        ),
+        (
+            "op ids the actor already used",
+            change(
+                &aa,
+                2,
+                1,
+                vec![op(ObjectId::Root, key("z"), false, put(), vec![])],
+            ),
+        ),
+        (
+            "missing object",
+            change(
+                &bb,
+                1,
+                4,
+                vec![op(
+                    ObjectId::Id(missing.clone()),
+                    key("z"),
+                    false,
+                    put(),
+                    vec![],
+                )],
+            ),
+        ),
+        (
+            "insert after a missing element",
+            change(
+                &bb,
+                1,
+                4,
+                vec![op(
+                    list.clone(),
+                    Key::Seq(ElementId::Id(missing.clone())),
+                    true,
+                    put(),
+                    vec![],
+                )],
+            ),
+        ),
+        (
+            "map key in a list",
+            change(
+                &bb,
+                1,
+                4,
+                vec![op(list.clone(), key("z"), false, put(), vec![])],
+            ),
+        ),
+        (
+            "pred under another key",
+            change(
+                &bb,
+                1,
+                4,
+                vec![op(
+                    ObjectId::Root,
+                    key("z"),
+                    false,
+                    put(),
+                    vec![OpId(1, aa.clone())],
+                )],
+            ),
+        ),
+        (
+            "mark outside text",
+            change(
+                &bb,
+                1,
+                4,
+                vec![op(
+                    list.clone(),
+                    Key::Seq(ElementId::Head),
+                    true,
+                    OpType::MarkBegin(MarkData {
+                        name: "bold".into(),
+                        value: true.into(),
+                        expand: false,
+                    }),
+                    vec![],
+                )],
+            ),
+        ),
+    ];
+
+    for (case, change) in malformed {
+        assert!(doc.apply_changes([change.clone()]).is_err(), "{case}");
+        let message = Message {
+            heads: vec![change.hash()],
+            need: vec![],
+            have: vec![],
+            changes: vec![change.raw_bytes().to_vec()].into(),
+            flags: None,
+            version: MessageVersion::V1,
+        };
+        assert!(
+            doc.receive_sync_message(&mut State::new(), message)
+                .is_err(),
+            "{case}"
+        );
+        assert_eq!(doc.save(), saved, "{case}");
+    }
+}
