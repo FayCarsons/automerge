@@ -133,7 +133,9 @@ impl ObjIdIter<'_> {
             .map_err(|e| DecodeColumnError::decode_raw("counter", e))?;
         match (actor, counter) {
             (None | Some(None), None | Some(None)) => Ok(Some(ObjId::root())),
-            (Some(Some(a)), Some(Some(c))) => Ok(Some(ObjId(OpId::new(c, a as usize)))),
+            (Some(Some(a)), Some(Some(c))) => OpId::try_new(c, a)
+                .map(|id| Some(ObjId(id)))
+                .ok_or_else(|| DecodeColumnError::invalid_value("counter", "op id out of range")),
             (_, Some(Some(0))) => Ok(Some(ObjId::root())),
             (Some(None) | None, _) => Err(DecodeColumnError::unexpected_null("actor")),
             (_, Some(None) | None) => Err(DecodeColumnError::unexpected_null("counter")),

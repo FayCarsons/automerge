@@ -174,12 +174,13 @@ impl<'a> Change<'a, Unverified> {
         self,
         mut f: F,
     ) -> Result<Change<'a, Verified>, ReadChangeOpError> {
-        let mut num_ops = 0;
+        let mut num_ops: usize = 0;
         for op in self.iter_ops() {
             f(op?);
             num_ops += 1;
         }
-        if u32::try_from(u64::from(self.start_op)).is_err() {
+        let max_op = u64::from(self.start_op).saturating_add(num_ops.saturating_sub(1) as u64);
+        if u32::try_from(max_op).is_err() {
             return Err(ReadChangeOpError::CounterTooLarge);
         }
         Ok(Change {

@@ -464,6 +464,10 @@ impl OpId {
         Self(counter.try_into().unwrap(), actor.try_into().unwrap())
     }
 
+    pub(crate) fn try_new(counter: impl TryInto<u32>, actor: impl TryInto<u32>) -> Option<Self> {
+        Some(Self(counter.try_into().ok()?, actor.try_into().ok()?))
+    }
+
     pub(crate) fn map(&self, actor_map: &[usize]) -> Result<OpId, AutomergeError> {
         let actor = actor_map.get(self.actor()).cloned();
         let actor = actor.ok_or(AutomergeError::InvalidActorIndex(self.actor()))?;

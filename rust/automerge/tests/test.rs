@@ -4625,4 +4625,31 @@ fn malformed_changes_are_rejected_and_leave_the_document_unchanged() {
         );
         assert_eq!(doc.save(), saved, "{case}");
     }
+
+    let too_large = [
+        change(
+            &bb,
+            1,
+            u32::MAX as u64,
+            vec![
+                op(ObjectId::Root, key("y"), false, put(), vec![]),
+                op(ObjectId::Root, key("z"), false, put(), vec![]),
+            ],
+        ),
+        change(
+            &bb,
+            1,
+            4,
+            vec![op(
+                ObjectId::Root,
+                key("k"),
+                false,
+                put(),
+                vec![OpId(1 << 32, aa.clone())],
+            )],
+        ),
+    ];
+    for change in too_large {
+        assert!(Change::from_bytes(change.raw_bytes().to_vec()).is_err());
+    }
 }

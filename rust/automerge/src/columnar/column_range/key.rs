@@ -183,14 +183,15 @@ impl KeyIter<'_> {
             (Some(None) | None, Some(Some(0)), Some(None) | None) => {
                 Ok(Some(Key::Elem(ElemId(OpId::new(0, 0)))))
             }
-            (Some(Some(actor)), Some(Some(ctr)), Some(None) | None) => match ctr.try_into() {
-                //Ok(ctr) => Some(Ok(Key::Elem(ElemId(OpId(ctr, actor as usize))))),
-                Ok(ctr) => Ok(Some(Key::Elem(ElemId(OpId::new(ctr, actor as usize))))),
-                Err(_) => Err(DecodeColumnError::invalid_value(
-                    "counter",
-                    "negative value for counter",
-                )),
-            },
+            (Some(Some(actor)), Some(Some(ctr)), Some(None) | None) => {
+                match OpId::try_new(ctr, actor) {
+                    Some(id) => Ok(Some(Key::Elem(ElemId(id)))),
+                    None => Err(DecodeColumnError::invalid_value(
+                        "counter",
+                        "op id out of range",
+                    )),
+                }
+            }
             (None | Some(None), None | Some(None), None | Some(None)) => Ok(None),
             (None | Some(None), k, _) => {
                 tracing::error!(key=?k, "unexpected null actor");
